@@ -9,3 +9,8 @@ edition = "2018"
 kafka = "0.8"
 rdkafka = "0.26"
 rusqlite = { version = "0.26.0", features = ["bundled"] }
+
+
+[[bin]]
+name = "client"
+path = "src/bin/client.rs"
