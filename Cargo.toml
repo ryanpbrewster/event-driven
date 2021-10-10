@@ -7,17 +7,18 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1"
-clap = "*"
 env_logger = "0.9"
 log = "0.4"
-kafka = "0.8"
 rdkafka = "0.26"
 rusqlite = { version = "0.26.0", features = ["bundled"] }
-serde = "1"
-serde_json = "1"
 tokio = {version = "1", features = ["macros", "rt-multi-thread"]}
 
 
 [[bin]]
 name = "client"
 path = "src/bin/client.rs"
+
+
+[[bin]]
+name = "worker"
+path = "src/bin/worker.rs"
