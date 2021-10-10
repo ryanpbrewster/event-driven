@@ -1,43 +1,26 @@
 use log::info;
 
 use anyhow::anyhow;
-use rdkafka::client::ClientContext;
+
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::stream_consumer::StreamConsumer;
-use rdkafka::consumer::{CommitMode, Consumer, ConsumerContext, Rebalance};
-use rdkafka::error::KafkaResult;
+use rdkafka::consumer::{CommitMode, Consumer, DefaultConsumerContext};
 use rdkafka::message::{Headers, Message};
-use rdkafka::topic_partition_list::TopicPartitionList;
 use rdkafka::util::get_rdkafka_version;
 
-// A context can be used to change the behavior of producers and consumers by adding callbacks
-// that will be executed by librdkafka.
-// This particular context sets up custom callbacks to log rebalancing events.
-struct CustomContext;
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    env_logger::init();
+    let (version_n, version_s) = get_rdkafka_version();
+    info!("rd_kafka_version: 0x{:08x}, {}", version_n, version_s);
 
-impl ClientContext for CustomContext {}
+    let topics = vec!["my-topic"];
+    let brokers = "localhost:9092";
+    let group_id = "my-group-2";
 
-impl ConsumerContext for CustomContext {
-    fn pre_rebalance(&self, rebalance: &Rebalance) {
-        info!("Pre rebalance {:?}", rebalance);
-    }
+    let context = DefaultConsumerContext;
 
-    fn post_rebalance(&self, rebalance: &Rebalance) {
-        info!("Post rebalance {:?}", rebalance);
-    }
-
-    fn commit_callback(&self, result: KafkaResult<()>, _offsets: &TopicPartitionList) {
-        info!("Committing offsets: {:?}", result);
-    }
-}
-
-// A type alias with your custom consumer can be created for convenience.
-type LoggingConsumer = StreamConsumer<CustomContext>;
-
-async fn consume_and_print(brokers: &str, group_id: &str, topics: &[&str]) -> anyhow::Result<()> {
-    let context = CustomContext;
-
-    let consumer: LoggingConsumer = ClientConfig::new()
+    let consumer: StreamConsumer<_> = ClientConfig::new()
         .set("group.id", group_id)
         .set("bootstrap.servers", brokers)
         .set("enable.partition.eof", "false")
@@ -45,8 +28,6 @@ async fn consume_and_print(brokers: &str, group_id: &str, topics: &[&str]) -> an
         .set("enable.auto.commit", "false")
         .set("enable.auto.offset.store", "false")
         .set("auto.offset.reset", "earliest")
-        //.set("statistics.interval.ms", "30000")
-        //.set("auto.offset.reset", "smallest")
         .set_log_level(RDKafkaLogLevel::Debug)
         .create_with_context(context)
         .expect("Consumer creation failed");
@@ -55,6 +36,7 @@ async fn consume_and_print(brokers: &str, group_id: &str, topics: &[&str]) -> an
         .subscribe(&topics.to_vec())
         .expect("Can't subscribe to specified topics");
 
+    let mut total = 0;
     loop {
         let m = consumer.recv().await?;
         let payload = match m.payload_view::<str>() {
@@ -67,8 +49,10 @@ async fn consume_and_print(brokers: &str, group_id: &str, topics: &[&str]) -> an
             }
             None => return Err(anyhow!("Error while deserializing message payload: None")),
         };
+        total += 1;
         info!(
-            "key: '{:?}', payload: '{}', topic: {}, partition: {}, offset: {}, timestamp: {:?}",
+            "[{}] key: '{:?}', payload: '{}', topic: {}, partition: {}, offset: {}, timestamp: {:?}",
+            total,
             m.key(),
             payload,
             m.topic(),
@@ -82,19 +66,6 @@ async fn consume_and_print(brokers: &str, group_id: &str, topics: &[&str]) -> an
                 info!("  Header {:#?}: {:?}", header.0, header.1);
             }
         }
-        // consumer.commit_message(&m, CommitMode::Async).unwrap();
+        consumer.commit_message(&m, CommitMode::Async).unwrap();
     }
-}
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    env_logger::init();
-    let (version_n, version_s) = get_rdkafka_version();
-    info!("rd_kafka_version: 0x{:08x}, {}", version_n, version_s);
-
-    let topics = vec!["my-topic"];
-    let brokers = "localhost:9092";
-    let group_id = "my-group-2";
-
-    consume_and_print(brokers, group_id, &topics).await
 }
