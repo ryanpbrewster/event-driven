@@ -10,3 +10,8 @@ rp:
     --node-id 0 \
     --check=false
 
+worker:
+  RUST_LOG=debug cargo run --bin worker
+
+client $name:
+  RUST_LOG=debug cargo run --bin client $name
