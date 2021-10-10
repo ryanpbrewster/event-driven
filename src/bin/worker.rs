@@ -1,5 +1,6 @@
-use std::collections::HashSet;
+use std::path::PathBuf;
 use std::time::Duration;
+use structopt::StructOpt;
 
 use log::info;
 
@@ -17,6 +18,7 @@ const BROKERS: &'static str = "localhost:9092";
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     env_logger::init();
+    let opts = CliOpts::from_args();
     let (version_n, version_s) = get_rdkafka_version();
     info!("rd_kafka_version: 0x{:08x}, {}", version_n, version_s);
 
@@ -43,7 +45,15 @@ async fn main() -> anyhow::Result<()> {
         .subscribe(&["requests"])
         .expect("Can't subscribe to specified topics");
 
-    let mut registry: HashSet<String> = HashSet::new();
+    let conn = match opts.file {
+        Some(file) => rusqlite::Connection::open(file)?,
+        None => rusqlite::Connection::open_in_memory()?,
+    };
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS registry (name TEXT PRIMARY KEY)",
+        [],
+    )?;
+    let mut stmt = conn.prepare("INSERT INTO registry (name) VALUES (?) ON CONFLICT DO NOTHING")?;
     loop {
         let m = consumer.recv().await?;
         let payload = match m.payload_view::<str>() {
@@ -65,7 +75,7 @@ async fn main() -> anyhow::Result<()> {
             m.offset(),
             m.timestamp()
         );
-        let response_payload = if registry.insert(payload) {
+        let response_payload = if stmt.execute([payload])? > 0 {
             "ok"
         } else {
             "taken"
@@ -109,4 +119,10 @@ async fn main() -> anyhow::Result<()> {
         }
         consumer.commit_message(&m, CommitMode::Async).unwrap();
     }
+}
+
+#[derive(StructOpt)]
+struct CliOpts {
+    #[structopt(long, parse(from_os_str))]
+    file: Option<PathBuf>,
 }
