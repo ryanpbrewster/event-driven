@@ -1,73 +1,100 @@
-use std::time::Duration;
+use log::info;
 
-use kafka::consumer::Consumer;
-use kafka::error::Error as KafkaError;
-use kafka::producer::{Producer, Record, RequiredAcks};
+use anyhow::anyhow;
+use rdkafka::client::ClientContext;
+use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
+use rdkafka::consumer::stream_consumer::StreamConsumer;
+use rdkafka::consumer::{CommitMode, Consumer, ConsumerContext, Rebalance};
+use rdkafka::error::KafkaResult;
+use rdkafka::message::{Headers, Message};
+use rdkafka::topic_partition_list::TopicPartitionList;
+use rdkafka::util::get_rdkafka_version;
 
-/// This program demonstrates sending single message through a
-/// `Producer`.  This is a convenient higher-level client that will
-/// fit most use cases.
-fn main() {
-    env_logger::init();
+// A context can be used to change the behavior of producers and consumers by adding callbacks
+// that will be executed by librdkafka.
+// This particular context sets up custom callbacks to log rebalancing events.
+struct CustomContext;
 
-    let broker = "localhost:9092".to_owned();
-    let topic = "my-topic".to_owned();
+impl ClientContext for CustomContext {}
 
-    produce_message(&topic, vec![broker.to_owned()]).unwrap();
-    consume_messages(topic, vec![broker]).unwrap();
+impl ConsumerContext for CustomContext {
+    fn pre_rebalance(&self, rebalance: &Rebalance) {
+        info!("Pre rebalance {:?}", rebalance);
+    }
+
+    fn post_rebalance(&self, rebalance: &Rebalance) {
+        info!("Post rebalance {:?}", rebalance);
+    }
+
+    fn commit_callback(&self, result: KafkaResult<()>, _offsets: &TopicPartitionList) {
+        info!("Committing offsets: {:?}", result);
+    }
 }
 
-fn produce_message<'a, 'b>(topic: &'b str, brokers: Vec<String>) -> Result<(), KafkaError> {
-    println!("About to publish a message at {:?} to: {}", brokers, topic);
+// A type alias with your custom consumer can be created for convenience.
+type LoggingConsumer = StreamConsumer<CustomContext>;
 
-    // ~ create a producer. this is a relatively costly operation, so
-    // you'll do this typically once in your application and re-use
-    // the instance many times.
-    let mut producer = Producer::from_hosts(brokers)
-        // ~ give the brokers one second time to ack the message
-        .with_ack_timeout(Duration::from_secs(1))
-        // ~ require only one broker to ack the message
-        .with_required_acks(RequiredAcks::One)
-        // ~ build the producer with the above settings
-        .create()?;
+async fn consume_and_print(brokers: &str, group_id: &str, topics: &[&str]) -> anyhow::Result<()> {
+    let context = CustomContext;
 
-    // ~ now send a single message.  this is a synchronous/blocking
-    // operation.
+    let consumer: LoggingConsumer = ClientConfig::new()
+        .set("group.id", group_id)
+        .set("bootstrap.servers", brokers)
+        .set("enable.partition.eof", "false")
+        .set("session.timeout.ms", "6000")
+        .set("enable.auto.commit", "false")
+        .set("enable.auto.offset.store", "false")
+        .set("auto.offset.reset", "earliest")
+        //.set("statistics.interval.ms", "30000")
+        //.set("auto.offset.reset", "smallest")
+        .set_log_level(RDKafkaLogLevel::Debug)
+        .create_with_context(context)
+        .expect("Consumer creation failed");
 
-    // ~ we're sending 'data' as a 'value'. there will be no key
-    // associated with the sent message.
-
-    // ~ we leave the partition "unspecified" - this is a negative
-    // partition - which causes the producer to find out one on its
-    // own using its underlying partitioner.
-    producer.send(&Record::from_value(topic, "hello, kafka"))?;
-
-    Ok(())
-}
-
-fn consume_messages(topic: String, brokers: Vec<String>) -> Result<(), KafkaError> {
-    let mut con = Consumer::from_hosts(brokers).with_topic(topic).create()?;
+    consumer
+        .subscribe(&topics.to_vec())
+        .expect("Can't subscribe to specified topics");
 
     loop {
-        println!("polling for messages to consume...");
-        let mss = con.poll()?;
-        if mss.is_empty() {
-            println!("No messages available right now.");
-            return Ok(());
-        }
-
-        for ms in mss.iter() {
-            for m in ms.messages() {
-                println!(
-                    "{}:{}@{}: {:?}",
-                    ms.topic(),
-                    ms.partition(),
-                    m.offset,
-                    m.value
-                );
+        let m = consumer.recv().await?;
+        let payload = match m.payload_view::<str>() {
+            Some(Ok(s)) => s,
+            Some(Err(e)) => {
+                return Err(anyhow!(
+                    "Error while deserializing message payload: {:?}",
+                    e
+                ))
             }
-            let _ = con.consume_messageset(ms);
+            None => return Err(anyhow!("Error while deserializing message payload: None")),
+        };
+        info!(
+            "key: '{:?}', payload: '{}', topic: {}, partition: {}, offset: {}, timestamp: {:?}",
+            m.key(),
+            payload,
+            m.topic(),
+            m.partition(),
+            m.offset(),
+            m.timestamp()
+        );
+        if let Some(headers) = m.headers() {
+            for i in 0..headers.count() {
+                let header = headers.get(i).unwrap();
+                info!("  Header {:#?}: {:?}", header.0, header.1);
+            }
         }
-        con.commit_consumed()?;
+        // consumer.commit_message(&m, CommitMode::Async).unwrap();
     }
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    env_logger::init();
+    let (version_n, version_s) = get_rdkafka_version();
+    info!("rd_kafka_version: 0x{:08x}, {}", version_n, version_s);
+
+    let topics = vec!["my-topic"];
+    let brokers = "localhost:9092";
+    let group_id = "my-group-2";
+
+    consume_and_print(brokers, group_id, &topics).await
 }
