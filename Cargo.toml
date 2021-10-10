@@ -10,7 +10,8 @@ anyhow = "1"
 env_logger = "0.9"
 log = "0.4"
 rdkafka = "0.26"
-rusqlite = { version = "0.26.0", features = ["bundled"] }
+rusqlite = {version = "0.26.0", features = ["bundled"]}
+structopt = "0.3"
 tokio = {version = "1", features = ["macros", "rt-multi-thread"]}
 
 

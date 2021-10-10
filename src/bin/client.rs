@@ -1,6 +1,7 @@
 use std::time::{Duration, SystemTime};
 
 use log::info;
+use structopt::StructOpt;
 
 use anyhow::anyhow;
 
@@ -17,6 +18,7 @@ const BROKERS: &'static str = "localhost:9092";
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     env_logger::init();
+    let opts = CliOpts::from_args();
     let (version_n, version_s) = get_rdkafka_version();
     info!("rd_kafka_version: 0x{:08x}, {}", version_n, version_s);
 
@@ -44,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
     producer
         .send(
             FutureRecord::to("requests")
-                .payload("ping")
+                .payload(&opts.name)
                 .key("my-key")
                 .headers(
                     OwnedHeaders::new()
@@ -114,4 +116,9 @@ async fn wait_for_response(response_topic: &str, request_id: &str) -> anyhow::Re
         consumer.commit_message(&m, CommitMode::Async).unwrap();
     }
     Ok(output.unwrap())
+}
+
+#[derive(StructOpt)]
+struct CliOpts {
+    name: String,
 }

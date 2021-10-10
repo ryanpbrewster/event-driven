@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::time::Duration;
 
 use log::info;
@@ -42,10 +43,11 @@ async fn main() -> anyhow::Result<()> {
         .subscribe(&["requests"])
         .expect("Can't subscribe to specified topics");
 
+    let mut registry: HashSet<String> = HashSet::new();
     loop {
         let m = consumer.recv().await?;
         let payload = match m.payload_view::<str>() {
-            Some(Ok(s)) => s,
+            Some(Ok(s)) => s.to_owned(),
             Some(Err(e)) => {
                 return Err(anyhow!(
                     "Error while deserializing message payload: {:?}",
@@ -63,6 +65,11 @@ async fn main() -> anyhow::Result<()> {
             m.offset(),
             m.timestamp()
         );
+        let response_payload = if registry.insert(payload) {
+            "ok"
+        } else {
+            "taken"
+        };
         let mut response_topic = None;
         let mut request_id = None;
         if let Some(headers) = m.headers() {
@@ -91,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
                 producer
                     .send(
                         FutureRecord::to(response_topic)
-                            .payload("responding to request!")
+                            .payload(response_payload)
                             .key("my-key")
                             .headers(OwnedHeaders::new().add("request-id", request_id)),
                         Duration::from_secs(0),
