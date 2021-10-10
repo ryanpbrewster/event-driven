@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
         .expect("Consumer creation failed");
 
     consumer
-        .subscribe(&["responses"])
+        .subscribe(&["requests"])
         .expect("Can't subscribe to specified topics");
 
     loop {
@@ -64,24 +64,43 @@ async fn main() -> anyhow::Result<()> {
             m.offset(),
             m.timestamp()
         );
+        let mut response_topic = None;
+        let mut request_id = None;
         if let Some(headers) = m.headers() {
             for i in 0..headers.count() {
-                let header = headers.get(i).unwrap();
+                let header = headers.get_as::<str>(i).unwrap();
                 info!("  Header {:#?}: {:?}", header.0, header.1);
+                match header.0 {
+                    "respond-to-topic" => {
+                        if let Ok(specified_response_topic) = header.1 {
+                            response_topic = Some(specified_response_topic);
+                        }
+                    }
+                    "request-id" => {
+                        if let Ok(specified_request_id) = header.1 {
+                            request_id = Some(specified_request_id);
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
 
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        producer
-            .send(
-                FutureRecord::to("requests")
-                    .payload("ping")
-                    .key("my-key")
-                    .headers(OwnedHeaders::new().add("header_key", "header_value")),
-                Duration::from_secs(0),
-            )
-            .await
-            .map_err(|(e, _)| e)?;
+        if let Some(response_topic) = response_topic {
+            if let Some(request_id) = request_id {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                producer
+                    .send(
+                        FutureRecord::to(response_topic)
+                            .payload("responding to request!")
+                            .key("my-key")
+                            .headers(OwnedHeaders::new().add("request-id", request_id)),
+                        Duration::from_secs(0),
+                    )
+                    .await
+                    .map_err(|(e, _)| e)?;
+            }
+        }
         consumer.commit_message(&m, CommitMode::Async).unwrap();
     }
 }
